@@ -20,6 +20,7 @@ from aiogram.types import BufferedInputFile, LinkPreviewOptions
 
 from common.config import DATA, env
 from common.daily import TZ
+from common.growth import promo
 from .card import render as render_cover
 from .feeds import FEEDS
 
@@ -95,7 +96,9 @@ def render(sections: dict, summaries: dict) -> str:
         for i in items:
             text = html.escape(summaries.get(i["link"]) or i["title"])
             parts.append(f"• {text} <a href=\"{html.escape(i['link'])}\">→</a>")
-    return "\n".join(parts)
+    body = "\n".join(parts)
+    footer = f"\n\n{promo('digest')}"
+    return body + footer if len(body) + len(footer) < 4000 else body
 
 
 async def main(dry_run: bool = False) -> None:
