@@ -16,7 +16,7 @@ from datetime import datetime
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, LinkPreviewOptions
 
 from common.config import DATA, env
 from common.daily import TZ
@@ -116,8 +116,15 @@ async def main(dry_run: bool = False) -> None:
             await bot.send_photo(env("CHANNEL"), BufferedInputFile(cover, filename="digest.jpg"))
         except Exception as e:
             print("cover failed", e, file=sys.stderr)
-        await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
-                               disable_web_page_preview=True)
+        top = next(iter(sections.values()))[0]["link"]  # lead story: Telegram shows its picture above the text
+        try:
+            await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
+                                   link_preview_options=LinkPreviewOptions(url=top, prefer_large_media=True,
+                                                                           show_above_text=True))
+        except Exception as e:  # never lose the digest over a preview problem
+            print("preview failed, sending plain", e, file=sys.stderr)
+            await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
+                                   link_preview_options=LinkPreviewOptions(is_disabled=True))
     finally:
         await bot.session.close()
     seen |= {i["link"] for s in sections.values() for i in s}
