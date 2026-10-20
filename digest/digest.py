@@ -12,10 +12,15 @@ import time
 import urllib.request
 
 import feedparser
+from datetime import datetime
+
 from aiogram import Bot
 from aiogram.enums import ParseMode
+from aiogram.types import BufferedInputFile
 
 from common.config import DATA, env
+from common.daily import TZ
+from .card import render as render_cover
 from .feeds import FEEDS
 
 SEEN = DATA / "digest_seen.json"
@@ -99,12 +104,18 @@ async def main(dry_run: bool = False) -> None:
     if not sections:
         print("nothing new")
         return
-    text = render(sections, summarize(sections))
+    summaries = summarize(sections)
+    text = render(sections, summaries)
     if dry_run:
         print(text)
         return
     bot = Bot(env("BOT_TOKEN"))
     try:
+        try:  # the cover is a bonus: if it fails, the text digest still goes out
+            cover = await asyncio.to_thread(render_cover, sections, summaries, datetime.now(TZ))
+            await bot.send_photo(env("CHANNEL"), BufferedInputFile(cover, filename="digest.jpg"))
+        except Exception as e:
+            print("cover failed", e, file=sys.stderr)
         await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
                                disable_web_page_preview=True)
     finally:
