@@ -71,6 +71,7 @@ class Store:
             );
             CREATE TABLE IF NOT EXISTS vouchers (user_id INTEGER, kind TEXT, n INTEGER, PRIMARY KEY (user_id, kind));
             CREATE TABLE IF NOT EXISTS wishes (word TEXT, user_id INTEGER, at INTEGER, PRIMARY KEY (word, user_id));
+            CREATE TABLE IF NOT EXISTS activity (user_id INTEGER, day TEXT, PRIMARY KEY (user_id, day));
             CREATE TABLE IF NOT EXISTS subs (
                 user_id INTEGER PRIMARY KEY,
                 at INTEGER
@@ -87,6 +88,7 @@ class Store:
     def ensure_user(self, uid: int) -> bool:
         """Creates the user if needed; True when this call created them (a brand-new user)."""
         cur = self.conn.execute("INSERT OR IGNORE INTO users (id, created) VALUES (?, ?)", (uid, int(time.time())))
+        self.conn.execute("INSERT OR IGNORE INTO activity VALUES (?, ?)", (uid, today().isoformat()))  # one row per user per day
         self.conn.commit()
         return cur.rowcount == 1
 
@@ -326,16 +328,46 @@ class Store:
 
     # ---- owner stats -------------------------------------------------------------------------
     def stats_text(self) -> str:
+        """Owner's dashboard: audience, activity, retention, money."""
         c = self.conn
+        day = today()
+        iso = lambda d: d.isoformat()
         users = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        day = c.execute("SELECT COUNT(*) FROM users WHERE used_day = ?", (today().isoformat(),)).fetchone()[0]
+
+        def new_since(n):  # users created in the last n days (today included)
+            start = datetime.combine(day - timedelta(days=n - 1), datetime.min.time(), tzinfo=TZ).timestamp()
+            return c.execute("SELECT COUNT(*) FROM users WHERE created >= ?", (int(start),)).fetchone()[0]
+
+        def active(n):
+            return c.execute("SELECT COUNT(DISTINCT user_id) FROM activity WHERE day >= ?", (iso(day - timedelta(days=n - 1)),)).fetchone()[0]
+
+        # day-1 retention: of those who first appeared yesterday, how many came back today
+        y0 = datetime.combine(day - timedelta(days=1), datetime.min.time(), tzinfo=TZ).timestamp()
+        y1 = datetime.combine(day, datetime.min.time(), tzinfo=TZ).timestamp()
+        cohort = [r[0] for r in c.execute("SELECT id FROM users WHERE created >= ? AND created < ?", (int(y0), int(y1)))]
+        back = sum(1 for u in cohort if c.execute("SELECT 1 FROM activity WHERE user_id = ? AND day = ?", (u, iso(day))).fetchone())
         paid, stars = c.execute("SELECT COUNT(*), COALESCE(SUM(stars), 0) FROM payments").fetchone()
         buyers = c.execute("SELECT COUNT(DISTINCT user_id) FROM payments").fetchone()[0]
+        week_stars = c.execute("SELECT COALESCE(SUM(stars), 0) FROM payments WHERE at >= ?", (int(time.time()) - 7 * 86400,)).fetchone()[0]
+        by_product = c.execute("SELECT payload, COUNT(*), SUM(stars) FROM payments GROUP BY payload ORDER BY SUM(stars) DESC").fetchall()
         premium = c.execute("SELECT COUNT(*) FROM users WHERE premium_until > ?", (int(time.time()),)).fetchone()[0]
         subs = c.execute("SELECT COUNT(*) FROM subs").fetchone()[0]
         refs = c.execute("SELECT COUNT(*) FROM referrals").fetchone()[0]
-        return (f"users: {users} (active today: {day})\npremium now: {premium}\npayments: {paid} from {buyers} buyers\n"
-                f"stars: {stars}\ndaily-DM subscribers: {subs}\nreferrals: {refs}")
+        conv = f"{100 * buyers / users:.1f}%" if users else "0%"
+        ret = f"{back} из {len(cohort)}" if cohort else "нет данных"
+        lines = [
+            f"👥 Людей всего: {users}",
+            f"🆕 Новых: сегодня {new_since(1)}, за 7 дней {new_since(7)}",
+            f"🔥 Активных: сегодня {active(1)}, за 7 дней {active(7)}",
+            f"↩️ Вернулись сегодня из пришедших вчера: {ret}",
+            f"🔔 Подписчиков на рассылку: {subs}",
+            f"🤝 Приглашений по ссылкам: {refs}",
+            "",
+            f"⭐ Выручка: {stars} ⭐ всего, {week_stars} ⭐ за 7 дней",
+            f"💳 Платежей: {paid}, покупателей: {buyers} ({conv} от всех), премиум сейчас: {premium}",
+        ]
+        lines += [f"   {payload}: {n} шт, {total} ⭐" for payload, n, total in by_product]
+        return "\n".join(lines)
 
     # kept for old callers
     def stats(self) -> str:
