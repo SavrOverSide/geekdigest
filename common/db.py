@@ -72,6 +72,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS vouchers (user_id INTEGER, kind TEXT, n INTEGER, PRIMARY KEY (user_id, kind));
             CREATE TABLE IF NOT EXISTS wishes (word TEXT, user_id INTEGER, at INTEGER, PRIMARY KEY (word, user_id));
             CREATE TABLE IF NOT EXISTS activity (user_id INTEGER, day TEXT, PRIMARY KEY (user_id, day));
+            CREATE TABLE IF NOT EXISTS gifts (code TEXT PRIMARY KEY, giver INTEGER, days INTEGER, used_by INTEGER, at INTEGER);
             CREATE TABLE IF NOT EXISTS subs (
                 user_id INTEGER PRIMARY KEY,
                 at INTEGER
@@ -289,6 +290,26 @@ class Store:
 
     def top_wishes(self, n: int = 15) -> list:
         return self.conn.execute("SELECT word, COUNT(*) c FROM wishes GROUP BY word ORDER BY c DESC, MAX(at) DESC LIMIT ?", (n,)).fetchall()
+
+    # ---- gifts: premium bought for somebody else, redeemed through a link ------------------------
+    def create_gift(self, giver: int, days: int) -> str:
+        code = secrets.token_hex(5)
+        self.conn.execute("INSERT INTO gifts VALUES (?, ?, ?, NULL, ?)", (code, giver, days, int(time.time())))
+        self.conn.commit()
+        return code
+
+    def get_gift(self, code: str):
+        row = self.conn.execute("SELECT giver, days, used_by FROM gifts WHERE code = ?", (code,)).fetchone()
+        return None if row is None else {"giver": row[0], "days": row[1], "used_by": row[2]}
+
+    def redeem_gift(self, code: str, uid: int) -> bool:
+        """Marks the gift as used by `uid`. False if it does not exist or was already used."""
+        cur = self.conn.execute("UPDATE gifts SET used_by = ? WHERE code = ? AND used_by IS NULL", (uid, code))
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    def open_gifts(self, giver: int) -> list:
+        return [r[0] for r in self.conn.execute("SELECT code FROM gifts WHERE giver = ? AND used_by IS NULL ORDER BY at DESC", (giver,))]
 
     # ---- duels -------------------------------------------------------------------------------
     def create_duel(self, creator: int, name: str, qs: list, score: int) -> str:
