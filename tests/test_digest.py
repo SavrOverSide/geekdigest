@@ -44,6 +44,17 @@ class Bot_(unittest.IsolatedAsyncioTestCase):
         await c.say("/sub")
         self.assertFalse(store.is_sub(10))
 
+    async def test_stats_for_owner_only(self):
+        import digest.bot as mod
+        mod.env = lambda name, default="": {"OWNER_ID": "77"}.get(name, default)
+        c = chat(77)
+        await c.say("/stats")
+        self.assertIn("Людей всего", c.last()["text"])
+        d = chat(78)
+        n = len(d.log)
+        await d.say("/stats")
+        self.assertEqual(len(d.log), n)
+
     async def test_stale_button(self):
         r = await chat(11).press("whatever")
         self.assertEqual(r.handler.__name__, "stale")

@@ -72,6 +72,15 @@ async def sub_cmd(m: Message):
     await m.answer(T[lang(user)]["subbed" if on else "unsubbed"], reply_markup=menu(user))
 
 
+@router.message(Command("stats"))
+async def stats_cmd(m: Message):
+    if str(m.from_user.id) != env("OWNER_ID"):
+        return
+    subs = store.subs()
+    ru = sum(1 for u in subs if (store.get_lang(u) or "ru") == "ru")
+    await m.answer(f"{store.stats_text()}\n\n🇷🇺 в личке: {ru}\n🇬🇧 в личке: {len(subs) - ru}")
+
+
 @router.callback_query(F.data == "sub")
 async def toggle_sub(c: CallbackQuery):
     user = c.from_user
