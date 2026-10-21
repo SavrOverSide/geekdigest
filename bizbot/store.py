@@ -15,6 +15,7 @@ class Store:
                 status TEXT DEFAULT 'active', reminded INTEGER DEFAULT 0, created INTEGER
             );
             CREATE INDEX IF NOT EXISTS bookings_start ON bookings (start);
+            CREATE TABLE IF NOT EXISTS closed_days (day TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS clients (user_id INTEGER PRIMARY KEY, name TEXT, phone TEXT, first_seen INTEGER);
         """)
 
@@ -68,7 +69,7 @@ class Store:
         return [self.get(r[0]) for r in self.conn.execute(q + " ORDER BY start", args)]
 
     def due_reminders(self, now: int, ahead_minutes: int) -> list:
-        rows = self.conn.execute("SELECT id FROM bookings WHERE status = 'active' AND reminded = 0 AND start > ? AND start <= ?",
+        rows = self.conn.execute("SELECT id FROM bookings WHERE status = 'active' AND reminded = 0 AND user_id != 0 AND start > ? AND start <= ?",
                                  (now, now + ahead_minutes * 60)).fetchall()
         return [self.get(r[0]) for r in rows]
 
@@ -76,12 +77,22 @@ class Store:
         self.conn.execute("UPDATE bookings SET reminded = 1 WHERE id = ?", (bid,))
         self.conn.commit()
 
+    def set_closed(self, day: str, closed: bool) -> None:
+        if closed:
+            self.conn.execute("INSERT OR IGNORE INTO closed_days VALUES (?)", (day,))
+        else:
+            self.conn.execute("DELETE FROM closed_days WHERE day = ?", (day,))
+        self.conn.commit()
+
+    def is_closed(self, day: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM closed_days WHERE day = ?", (day,)).fetchone() is not None
+
     def stats(self, now: int) -> dict:
         c = self.conn
         week = now - 7 * 86400
         return {
             "clients": c.execute("SELECT COUNT(*) FROM clients").fetchone()[0],
-            "bookings_week": c.execute("SELECT COUNT(*) FROM bookings WHERE created >= ?", (week,)).fetchone()[0],
-            "cancelled_week": c.execute("SELECT COUNT(*) FROM bookings WHERE created >= ? AND status = 'cancelled'", (week,)).fetchone()[0],
-            "upcoming": c.execute("SELECT COUNT(*) FROM bookings WHERE status = 'active' AND start >= ?", (now,)).fetchone()[0],
+            "bookings_week": c.execute("SELECT COUNT(*) FROM bookings WHERE created >= ? AND user_id != 0", (week,)).fetchone()[0],
+            "cancelled_week": c.execute("SELECT COUNT(*) FROM bookings WHERE created >= ? AND status = 'cancelled' AND user_id != 0", (week,)).fetchone()[0],
+            "upcoming": c.execute("SELECT COUNT(*) FROM bookings WHERE status = 'active' AND user_id != 0 AND start >= ?", (now,)).fetchone()[0],
         }

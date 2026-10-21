@@ -54,8 +54,12 @@ def master_name(mid: str) -> str:
     return MASTERS[mid]["name"] if mid in MASTERS else ""
 
 
+def service_name(sid: str) -> str:
+    return "⛔ Занято" if sid == "block" else SERVICES.get(sid, {"name": sid})["name"]
+
+
 def describe(b: dict) -> str:
-    s = SERVICES.get(b["service"], {"name": b["service"]})
+    s = {"name": service_name(b["service"])}
     who = f" · мастер {master_name(b['master'])}" if b["master"] else ""
     return f"{s['name']}{who}\n🗓 {when(b['start'])}"
 
@@ -67,7 +71,7 @@ def days() -> list:
     out = []
     for i in range(CFG.get("days_ahead", 7)):
         d = today + timedelta(days=i)
-        if CFG["hours"].get(DAYS[d.weekday()]):
+        if CFG["hours"].get(DAYS[d.weekday()]) and not store.is_closed(d.strftime("%y%m%d")):
             label = "Сегодня" if i == 0 else "Завтра" if i == 1 else f"{WD[d.weekday()].capitalize()} {d.day:02d}.{d.month:02d}"
             out.append((d.strftime("%y%m%d"), label))
     return out
@@ -77,7 +81,7 @@ def slots(day: str, sid: str, mid: str) -> list:
     """Free start times (unix) for a service on a day. mid '*' = any master, '-' = no masters at all."""
     d = datetime.strptime(day, "%y%m%d").date()
     hours = CFG["hours"].get(DAYS[d.weekday()])
-    if not hours:
+    if not hours or store.is_closed(day):
         return []
     minutes = SERVICES[sid]["minutes"]
     open_t, close_t = (datetime.combine(d, datetime.strptime(h, "%H:%M").time(), TZ).timestamp() for h in hours)
@@ -313,7 +317,7 @@ async def schedule(m: Message, frm: int, to: int, title: str):
     items = store.upcoming(frm=frm, to=to)
     if not items:
         return await m.answer(f"{title}: записей нет.")
-    lines = [f"{datetime.fromtimestamp(b['start'], TZ):%d.%m %H:%M} · {SERVICES.get(b['service'], {'name': b['service']})['name']}"
+    lines = [f"{datetime.fromtimestamp(b['start'], TZ):%d.%m %H:%M} · {service_name(b['service'])}"
              + (f" · {master_name(b['master'])}" if b["master"] else "") + f"\n   👤 {b['name']} · {b['phone']} (№{b['id']})"
              for b in items]
     await m.answer(f"{title}:\n\n" + "\n".join(lines))
@@ -332,6 +336,84 @@ async def tomorrow_cmd(m: Message):
 @router.message(Command("week"))
 async def week_cmd(m: Message):
     await schedule(m, day_bounds(0)[0], day_bounds(7)[0], "Неделя")
+
+
+ADMIN_HELP = ("Команды администратора:\n"
+              "/today, /tomorrow, /week: расписание\n"
+              "/off 30.10: закрыть день (праздник, отпуск)\n"
+              "/on 30.10: открыть день обратно\n"
+              "/block 30.10 15:00-16:30 [мастер]: занять время (запись по телефону, перерыв)\n"
+              "/stats: цифры за неделю")
+
+
+def parse_day(text: str):
+    """'30.10' or '30.10.2026' -> 'yymmdd' (the nearest such date from today on), or None."""
+    m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?", text.strip())
+    if not m:
+        return None
+    today = datetime.fromtimestamp(clock(), TZ).date()
+    year = int(m.group(3)) if m.group(3) else today.year
+    try:
+        d = datetime(year, int(m.group(2)), int(m.group(1))).date()
+    except ValueError:
+        return None
+    if not m.group(3) and d < today:
+        d = d.replace(year=d.year + 1)
+    return d.strftime("%y%m%d")
+
+
+def args_of(m: Message) -> str:
+    parts = (m.text or "").split(maxsplit=1)
+    return parts[1] if len(parts) > 1 else ""
+
+
+@router.message(Command("admin"))
+async def admin_help(m: Message):
+    if m.from_user.id in admins():
+        await m.answer(ADMIN_HELP)
+
+
+@router.message(Command("off", "on"))
+async def toggle_day(m: Message):
+    if m.from_user.id not in admins():
+        return
+    day = parse_day(args_of(m))
+    if day is None:
+        return await m.answer("Укажите дату, например: /off 30.10")
+    closing = (m.text or "").startswith("/off")
+    store.set_closed(day, closing)
+    label = datetime.strptime(day, "%y%m%d").strftime("%d.%m.%Y")
+    if closing:
+        clash = store.upcoming(frm=int(datetime.strptime(day, "%y%m%d").replace(tzinfo=TZ).timestamp()),
+                               to=int(datetime.strptime(day, "%y%m%d").replace(tzinfo=TZ).timestamp()) + 86400)
+        note = f"\n⚠️ На этот день уже есть записи ({len(clash)}), их нужно перенести: /today или /week." if clash else ""
+        await m.answer(f"🔒 {label}: день закрыт для записи.{note}")
+    else:
+        await m.answer(f"🔓 {label}: день снова открыт для записи.")
+
+
+@router.message(Command("block"))
+async def block(m: Message):
+    if m.from_user.id not in admins():
+        return
+    parts = args_of(m).split()
+    rng = re.fullmatch(r"(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})", parts[1]) if len(parts) >= 2 else None
+    day = parse_day(parts[0]) if parts else None
+    if day is None or rng is None:
+        return await m.answer("Пример: /block 30.10 15:00-16:30 Арман  (мастера можно не указывать, тогда занято у всех)")
+    h1, m1, h2, m2 = map(int, rng.groups())
+    base = datetime.strptime(day, "%y%m%d").replace(tzinfo=TZ)
+    start, end = int((base + timedelta(hours=h1, minutes=m1)).timestamp()), int((base + timedelta(hours=h2, minutes=m2)).timestamp())
+    if end <= start:
+        return await m.answer("Конец должен быть позже начала.")
+    who = " ".join(parts[2:]).strip().lower()
+    targets = [mid for mid, x in MASTERS.items() if not who or x["name"].lower() == who] if MASTERS else [""]
+    if MASTERS and who and not targets:
+        return await m.answer("Нет такого мастера. Мастера: " + ", ".join(x["name"] for x in MASTERS.values()))
+    for mid in targets:
+        store.add(0, "Занято (администратор)", "", "block", mid, start, (end - start) // 60)
+    names = ", ".join(master_name(t) for t in targets if t) or "всех"
+    await m.answer(f"⛔ {base:%d.%m} {h1:02d}:{m1:02d}–{h2:02d}:{m2:02d} занято у: {names}.")
 
 
 @router.message(Command("stats"))
