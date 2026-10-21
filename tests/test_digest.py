@@ -151,3 +151,8 @@ class Profile(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Clean(unittest.TestCase):
+    def test_double_encoded_entities_and_tags(self):
+        self.assertEqual(dg.clean("&amp;quot;Hi&amp;quot; it&amp;#x27;s <b>fine</b>", 100), '"Hi" it\'s fine')

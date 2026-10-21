@@ -39,7 +39,7 @@ MAX_AGE = 36 * 3600
 
 def clean(text: str, limit: int) -> str:
     text = re.sub(r"<[^>]+>", " ", text or "")
-    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    text = re.sub(r"\s+", " ", html.unescape(html.unescape(text))).strip()  # some feeds double-encode
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
