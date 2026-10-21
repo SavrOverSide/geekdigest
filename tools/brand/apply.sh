@@ -9,7 +9,7 @@ setup() { # bot channel photo title description text button1label button1url [bu
   local bot=$1 ch=$2 photo=$3 title=$4 desc=$5 text=$6; shift 6
   local T; T=$(tok "$bot")
   echo "== $ch"
-  echo " photo";  call "$T" setChatPhoto -F chat_id="$ch" -F photo=@"$photo"
+  echo " photo";  call "$T" setChatPhoto --form-string chat_id="$ch" -F photo=@"$photo"
   echo " title";  call "$T" setChatTitle --data-urlencode chat_id="$ch" --data-urlencode title="$title"
   echo " about";  call "$T" setChatDescription --data-urlencode chat_id="$ch" --data-urlencode description="$desc"
   local kb; kb=$(python3 - "$@" <<'PY'
