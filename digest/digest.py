@@ -1,7 +1,9 @@
 """Daily digest: collects fresh items from RSS feeds and posts one message to the channel.
 
-Posted daily by run.py; one-off run:  python -m digest.digest [--dry-run]
-Without ANTHROPIC_API_KEY it posts headlines with links; with the key it writes short Russian summaries.
+Posted daily by run.py; one-off run:  python -m digest.digest [ru|en] [--dry-run]
+Two editions, built from sources in their own language (no translation needed): ru -> CHANNEL, en -> CHANNEL_EN.
+Subscribers who started the bot get the edition in their language as a direct message.
+With ANTHROPIC_API_KEY each item is rewritten into one short sentence; without it headlines are used.
 """
 import asyncio
 import html
@@ -20,11 +22,17 @@ from aiogram.types import BufferedInputFile, LinkPreviewOptions
 
 from common.config import DATA, env
 from common.daily import TZ
-from common.growth import promo
+from common.growth import broadcast, promo
 from .card import render as render_cover
 from .feeds import FEEDS
 
-SEEN = DATA / "digest_seen.json"
+LANGS = ("ru", "en")
+
+
+def seen_file(lang: str):
+    return DATA / ("digest_seen.json" if lang == "ru" else f"digest_seen_{lang}.json")
+
+
 PER_SECTION = 3
 MAX_AGE = 36 * 3600
 
@@ -35,10 +43,10 @@ def clean(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
-def collect(seen: set) -> dict:
+def collect(seen: set, lang: str = "ru") -> dict:
     sections: dict[str, list] = {}
     now = time.time()
-    for section, url in FEEDS:
+    for section, url in FEEDS[lang]:
         try:
             feed = feedparser.parse(url, agent="Mozilla/5.0 digest-bot")
         except Exception as e:  # one broken feed must not stop the digest
@@ -59,15 +67,16 @@ def collect(seen: set) -> dict:
     return sections
 
 
-def summarize(sections: dict) -> dict:
+def summarize(sections: dict, lang: str = "ru") -> dict:
     """Optionally rewrite each item into one Russian sentence via the Anthropic API."""
     key = env("ANTHROPIC_API_KEY")
     if not key:
         return {}
     items = [i for s in sections.values() for i in s]
+    ask = {"ru": "Перескажи каждую новость одним коротким предложением на русском, без воды и кликбейта. ",
+           "en": "Retell each news item in one short plain English sentence, no fluff or clickbait. "}[lang]
     prompt = (
-        "Перескажи каждую новость одним коротким предложением на русском, без воды и кликбейта. "
-        "Верни JSON-массив строк в том же порядке.\n\n"
+        ask + "Верни JSON-массив строк в том же порядке (return a JSON array of strings in the same order).\n\n"
         + "\n".join(f"{n}. {i['title']} — {i['summary']}" for n, i in enumerate(items, 1))
     )
     req = urllib.request.Request(
@@ -89,8 +98,11 @@ def summarize(sections: dict) -> dict:
         return {}
 
 
-def render(sections: dict, summaries: dict) -> str:
-    parts = [f"<b>Гик-дайджест · {time.strftime('%d.%m.%Y')}</b>"]
+TITLE = {"ru": "Гик-дайджест", "en": "Geek Digest"}
+
+
+def render(sections: dict, summaries: dict, lang: str = "ru") -> str:
+    parts = [f"<b>{TITLE[lang]} · {time.strftime('%d.%m.%Y')}</b>"]
     for section, items in sections.items():
         parts.append(f"\n<b>{section}</b>")
         for i in items:
@@ -101,39 +113,78 @@ def render(sections: dict, summaries: dict) -> str:
     return body + footer if len(body) + len(footer) < 4000 else body
 
 
-async def main(dry_run: bool = False) -> None:
-    seen = set(json.loads(SEEN.read_text())) if SEEN.exists() else set()
-    sections = collect(seen)
-    if not sections:
-        print("nothing new")
-        return
-    summaries = summarize(sections)
-    text = render(sections, summaries)
-    if dry_run:
-        print(text)
-        return
-    bot = Bot(env("BOT_TOKEN"))
+async def send_edition(bot: Bot, chat, cover: bytes, text: str, top: str) -> None:
+    """One edition to one chat: cover picture, then the digest with a large preview of the lead story."""
+    try:  # the cover is a bonus: if it fails, the text digest still goes out
+        await bot.send_photo(chat, BufferedInputFile(cover, filename="digest.jpg"))
+    except Exception as e:
+        if is_blocked(e):
+            raise
+        print("cover failed", e, file=sys.stderr)
     try:
-        try:  # the cover is a bonus: if it fails, the text digest still goes out
-            cover = await asyncio.to_thread(render_cover, sections, summaries, datetime.now(TZ))
-            await bot.send_photo(env("CHANNEL"), BufferedInputFile(cover, filename="digest.jpg"))
-        except Exception as e:
-            print("cover failed", e, file=sys.stderr)
-        top = next(iter(sections.values()))[0]["link"]  # lead story: Telegram shows its picture above the text
-        try:
-            await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
-                                   link_preview_options=LinkPreviewOptions(url=top, prefer_large_media=True,
-                                                                           show_above_text=True))
-        except Exception as e:  # never lose the digest over a preview problem
-            print("preview failed, sending plain", e, file=sys.stderr)
-            await bot.send_message(env("CHANNEL"), text, parse_mode=ParseMode.HTML,
-                                   link_preview_options=LinkPreviewOptions(is_disabled=True))
+        await bot.send_message(chat, text, parse_mode=ParseMode.HTML,
+                               link_preview_options=LinkPreviewOptions(url=top, prefer_large_media=True, show_above_text=True))
+    except Exception as e:  # never lose the digest over a preview problem
+        if is_blocked(e):
+            raise
+        print("preview failed, sending plain", e, file=sys.stderr)
+        await bot.send_message(chat, text, parse_mode=ParseMode.HTML, link_preview_options=LinkPreviewOptions(is_disabled=True))
+
+
+def is_blocked(e: Exception) -> bool:
+    return type(e).__name__ in ("TelegramForbiddenError",)
+
+
+async def main(dry_run: bool = False, langs=LANGS, store=None) -> None:
+    """Builds each edition once and delivers it to its channel and to the subscribers of that language."""
+    bot = None if dry_run else Bot(env("BOT_TOKEN"))
+    try:
+        for lang in langs:
+            channel = env("CHANNEL") if lang == "ru" else env("CHANNEL_EN")
+            subs = [u for u in (store.subs() if store else []) if (store.get_lang(u) or "ru") == lang]
+            if not channel and not subs and not dry_run:
+                continue
+            f = seen_file(lang)
+            seen = set(json.loads(f.read_text())) if f.exists() else set()
+            sections = collect(seen, lang)
+            if not sections:
+                print(lang, "nothing new")
+                continue
+            summaries = summarize(sections, lang)
+            text = render(sections, summaries, lang)
+            if dry_run:
+                print(text)
+                continue
+            cover = None
+            try:
+                cover = await asyncio.to_thread(render_cover, sections, summaries, datetime.now(TZ),
+                                                env("HANDLE" if lang == "ru" else "HANDLE_EN", "@geekdigests"), lang)
+            except Exception as e:
+                print("cover failed", e, file=sys.stderr)
+            top = next(iter(sections.values()))[0]["link"]  # lead story: Telegram shows its picture above the text
+
+            async def deliver(chat):
+                if cover:
+                    await send_edition(bot, chat, cover, text, top)
+                else:
+                    await bot.send_message(chat, text, parse_mode=ParseMode.HTML, link_preview_options=LinkPreviewOptions(is_disabled=True))
+
+            if channel:
+                try:
+                    await deliver(channel)
+                except Exception as e:
+                    print("channel post failed", lang, e, file=sys.stderr)
+            if subs:
+                for uid in await broadcast(subs, deliver):
+                    store.set_sub(uid, False)  # people who blocked the bot are unsubscribed
+            seen |= {i["link"] for s in sections.values() for i in s}
+            DATA.mkdir(exist_ok=True)
+            f.write_text(json.dumps(sorted(seen)[-3000:]))
     finally:
-        await bot.session.close()
-    seen |= {i["link"] for s in sections.values() for i in s}
-    DATA.mkdir(exist_ok=True)
-    SEEN.write_text(json.dumps(sorted(seen)[-3000:]))
+        if bot:
+            await bot.session.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main(dry_run="--dry-run" in sys.argv))
+    pick = [a for a in sys.argv[1:] if a in LANGS] or LANGS
+    asyncio.run(main(dry_run="--dry-run" in sys.argv, langs=pick))

@@ -45,7 +45,15 @@ def over(img, layer):
     return Image.alpha_composite(img.convert("RGBA"), layer).convert("RGB")
 
 
-def render(sections: dict, summaries: dict, when: datetime, handle: str = "@geekdigests") -> bytes:
+COPY = {
+    "ru": {"brand": "ГИК-ДАЙДЖЕСТ", "l1": "Что нового", "l2": "сегодня", "tags": "ИИ · игры · техника · наука"},
+    "en": {"brand": "GEEK DIGEST", "l1": "What's new", "l2": "today", "tags": "AI · games · tech · science"},
+}
+MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def render(sections: dict, summaries: dict, when: datetime, handle: str = "@geekdigests", lang: str = "ru") -> bytes:
+    c = COPY[lang]
     top, bottom = (10, 12, 28), (24, 14, 46)
     strip = Image.new("RGB", (1, H))
     for y in range(H):
@@ -64,15 +72,15 @@ def render(sections: dict, summaries: dict, when: datetime, handle: str = "@geek
     white = (255, 255, 255, 255)
     d.rounded_rectangle((PAD, 80, PAD + 64, 144), 18, fill=(255, 200, 90, 255))
     d.text((PAD + 32, 112), "G", font=font("ExtraBold", 40), fill=top + (255,), anchor="mm")
-    d.text((PAD + 86, 112), "ГИК-ДАЙДЖЕСТ", font=font("Bold", 30), fill=white, anchor="lm")
-    date_s = f"{when.day} {MONTHS[when.month - 1]}".upper()
+    d.text((PAD + 86, 112), c["brand"], font=font("Bold", 30), fill=white, anchor="lm")
+    date_s = (f"{when.day} {MONTHS[when.month - 1]}" if lang == "ru" else f"{MONTHS_EN[when.month - 1]} {when.day}").upper()
     f = font("SemiBold", 24)
     tw = d.textlength(date_s, font=f)
     d.rounded_rectangle((W - PAD - tw - 48, 82, W - PAD, 142), 30, fill=(255, 200, 90, 36), outline=(255, 200, 90, 150), width=2)
     d.text((W - PAD - 24, 112), date_s, font=f, fill=(255, 200, 90, 255), anchor="rm")
 
-    d.text((PAD, 230), "Что нового", font=font("ExtraBold", 120), fill=white)
-    d.text((PAD, 360), "сегодня", font=font("ExtraBold", 120), fill=(255, 200, 90, 255))
+    d.text((PAD, 230), c["l1"], font=font("ExtraBold", 120), fill=white)
+    d.text((PAD, 360), c["l2"], font=font("ExtraBold", 120), fill=(255, 200, 90, 255))
 
     items = list(sections.items())[:5]
     y = 560
@@ -94,7 +102,7 @@ def render(sections: dict, summaries: dict, when: datetime, handle: str = "@geek
 
     d.line((PAD, H - 140, W - PAD, H - 140), fill=(255, 255, 255, 40), width=2)
     d.text((PAD, H - 90), handle, font=font("Bold", 36), fill=(255, 200, 90, 255), anchor="lm")
-    d.text((W - PAD, H - 90), "ИИ · игры · техника · наука", font=font("Medium", 26), fill=(255, 255, 255, 150), anchor="rm")
+    d.text((W - PAD, H - 90), c["tags"], font=font("Medium", 26), fill=(255, 255, 255, 150), anchor="rm")
 
     out = io.BytesIO()
     img.save(out, "JPEG", quality=92, optimize=True)
