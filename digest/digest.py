@@ -53,7 +53,7 @@ def collect(seen: set, lang: str = "ru") -> dict:
             print("feed failed", url, e, file=sys.stderr)
             continue
         for entry in feed.entries[:15]:
-            link = entry.get("link")
+            link = re.sub(r"\?utm_[^#]*", "", entry.get("link") or "")  # tracking tail of the link is noise
             stamp = entry.get("published_parsed") or entry.get("updated_parsed")
             if not link or link in seen or (stamp and now - time.mktime(stamp) > MAX_AGE):
                 continue
