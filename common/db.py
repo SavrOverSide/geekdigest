@@ -70,6 +70,7 @@ class Store:
                 user_id INTEGER PRIMARY KEY, correct INTEGER, answered INTEGER, rounds INTEGER
             );
             CREATE TABLE IF NOT EXISTS vouchers (user_id INTEGER, kind TEXT, n INTEGER, PRIMARY KEY (user_id, kind));
+            CREATE TABLE IF NOT EXISTS wishes (word TEXT, user_id INTEGER, at INTEGER, PRIMARY KEY (word, user_id));
             CREATE TABLE IF NOT EXISTS subs (
                 user_id INTEGER PRIMARY KEY,
                 at INTEGER
@@ -278,6 +279,14 @@ class Store:
     def vouchers(self, uid: int, kind: str) -> int:
         row = self.conn.execute("SELECT n FROM vouchers WHERE user_id = ? AND kind = ?", (uid, kind)).fetchone()
         return row[0] if row else 0
+
+    # ---- wishes: words people looked for and we do not have yet ---------------------------------
+    def add_wish(self, uid: int, word: str) -> None:
+        self.conn.execute("INSERT OR IGNORE INTO wishes VALUES (?, ?, ?)", (word, uid, int(time.time())))
+        self.conn.commit()
+
+    def top_wishes(self, n: int = 15) -> list:
+        return self.conn.execute("SELECT word, COUNT(*) c FROM wishes GROUP BY word ORDER BY c DESC, MAX(at) DESC LIMIT ?", (n,)).fetchall()
 
     # ---- duels -------------------------------------------------------------------------------
     def create_duel(self, creator: int, name: str, qs: list, score: int) -> str:
