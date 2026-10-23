@@ -151,6 +151,32 @@ class Feeds(unittest.TestCase):
         self.assertNotIn("https://a/3", links)
 
 
+class Report(unittest.TestCase):
+    def test_report_counts_today_and_survives_missing_tables(self):
+        import pathlib, sqlite3, tempfile
+        from digest.report import report
+        from common.daily import TZ
+        from datetime import datetime
+        root = pathlib.Path(tempfile.mkdtemp())
+        now = datetime(2026, 10, 23, 20, 0, tzinfo=TZ).timestamp()
+        db = root / "wordlore/data"
+        db.mkdir(parents=True)
+        c = sqlite3.connect(db / "lingvo.sqlite3")
+        c.executescript("CREATE TABLE users (id INTEGER, created INTEGER); CREATE TABLE payments (stars INTEGER, at INTEGER);"
+                        "CREATE TABLE activity (user_id INTEGER, day TEXT); CREATE TABLE subs (user_id INTEGER);")
+        c.executemany("INSERT INTO users VALUES (?, ?)", [(1, now - 5 * 86400), (2, now - 3600), (3, now - 60)])
+        c.executemany("INSERT INTO activity VALUES (?, ?)", [(1, "2026-10-23"), (2, "2026-10-23"), (1, "2026-10-20")])
+        c.executemany("INSERT INTO payments VALUES (?, ?)", [(99, now - 100), (25, now - 3 * 86400)])
+        c.commit()
+        (root / "ideaforgegen/data").mkdir(parents=True)
+        sqlite3.connect(root / "ideaforgegen/data/ideas.sqlite3").execute("CREATE TABLE users (id INTEGER, created INTEGER)")
+        text = report(now, root)
+        self.assertIn("👥 3 всего, +2 сегодня · активных сегодня 2, за 7 дней 2", text)
+        self.assertIn("⭐ сегодня 99, всего 124", text)
+        self.assertIn("Гик-дайджест: база не найдена", text)
+        self.assertIn("Итого за день: +2 новых, 99 ⭐.", text)
+
+
 class Profile(unittest.IsolatedAsyncioTestCase):
     async def test_profile(self):
         from common.profile import setup_profile

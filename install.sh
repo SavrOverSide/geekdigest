@@ -26,7 +26,9 @@ done
 for r in $REPOS; do
   docker build -q -t "$r" "$r" >/dev/null
   docker rm -f "$r" >/dev/null 2>&1 || true
-  docker run -d --restart=always --env-file "$r/.env" -v "$DIR/$r/data:/app/data" --name "$r" "$r" >/dev/null
+  extra=""
+  [ "$r" = geekdigest ] && extra="-v $DIR:/tenge:ro"   # the evening owner report reads every bot's numbers (read-only)
+  docker run -d --restart=always --env-file "$r/.env" -v "$DIR/$r/data:/app/data" $extra --name "$r" "$r" >/dev/null
   echo "✓ $r запущен"
 done
 
