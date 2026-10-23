@@ -74,3 +74,36 @@ async def channel_counts(bot) -> dict:
 async def send_report(bot, owner: str) -> None:
     if owner.isdigit():
         await bot.send_message(int(owner), report(channels=await channel_counts(bot)), parse_mode="HTML")
+
+
+def backup_zip(root: Path = ROOT, own: Path = Path("/app/data")) -> bytes:
+    """A consistent snapshot of every bot's database, zipped (users, payments, premium, saved items)."""
+    import io
+    import tempfile
+    import zipfile
+    files = sorted(root.glob("*/data/*.sqlite3")) + sorted(own.glob("*.sqlite3"))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z, tempfile.TemporaryDirectory() as tmp:
+        for f in files:
+            snap = Path(tmp) / f.name
+            src = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+            dst = sqlite3.connect(snap)
+            src.backup(dst)   # safe while the bot keeps writing
+            src.close()
+            dst.close()
+            z.write(snap, f"{'geekdigest' if f.parent == own else f.parent.parent.name}/{f.name}")
+    return buf.getvalue()
+
+
+async def send_backup(bot, owner: str, now: float = None) -> bool:
+    """Sundays only: the owner gets the databases as a file (restore: put them back into /opt/tenge/<bot>/data/)."""
+    from aiogram.types import BufferedInputFile
+    now = time.time() if now is None else now
+    d = datetime.fromtimestamp(now, TZ)
+    if d.weekday() != 6 or not owner.isdigit():
+        return False
+    data = backup_zip()
+    await bot.send_document(int(owner), BufferedInputFile(data, filename=f"tenge-backup-{d:%Y-%m-%d}.zip"),
+                            caption="🗄 Еженедельная копия баз ботов (пользователи, оплаты, премиумы). Сохрани файл; "
+                                    "при переезде сервера его достаточно положить обратно в /opt/tenge/<бот>/data/.")
+    return True

@@ -177,6 +177,38 @@ class Report(unittest.TestCase):
         self.assertIn("Итого за день: +2 новых, 99 ⭐.", text)
 
 
+class Backup(unittest.TestCase):
+    def test_backup_contains_every_database_and_is_readable(self):
+        import io, pathlib, sqlite3, tempfile, zipfile
+        from digest.report import backup_zip
+        root = pathlib.Path(tempfile.mkdtemp())
+        own = pathlib.Path(tempfile.mkdtemp()) / "data"
+        own.mkdir()
+        for bot, name in (("wordlore", "lingvo"), ("ideaforgegen", "ideas")):
+            (root / bot / "data").mkdir(parents=True)
+            c = sqlite3.connect(root / bot / "data" / f"{name}.sqlite3")
+            c.execute("CREATE TABLE payments (stars INTEGER)")
+            c.execute("INSERT INTO payments VALUES (99)")
+            c.commit()
+        sqlite3.connect(own / "digest.sqlite3").execute("CREATE TABLE users (id INTEGER)")
+        z = zipfile.ZipFile(io.BytesIO(backup_zip(root, own)))
+        names = z.namelist()
+        self.assertIn("wordlore/lingvo.sqlite3", names)
+        self.assertIn("ideaforgegen/ideas.sqlite3", names)
+        self.assertEqual(len(names), 3)
+        out = pathlib.Path(tempfile.mkdtemp()) / "x.sqlite3"
+        out.write_bytes(z.read("wordlore/lingvo.sqlite3"))
+        self.assertEqual(sqlite3.connect(out).execute("SELECT stars FROM payments").fetchone()[0], 99)
+
+    def test_backup_only_on_sundays(self):
+        import asyncio
+        from datetime import datetime
+        from common.daily import TZ
+        from digest.report import send_backup
+        friday = datetime(2026, 10, 23, 21, 5, tzinfo=TZ).timestamp()
+        self.assertFalse(asyncio.run(send_backup(Bot("x"), "1", friday)))
+
+
 class Profile(unittest.IsolatedAsyncioTestCase):
     async def test_profile(self):
         from common.profile import setup_profile
