@@ -27,7 +27,8 @@ for r in $REPOS; do
   docker build -q -t "$r" "$r" >/dev/null
   docker rm -f "$r" >/dev/null 2>&1 || true
   extra=""
-  [ "$r" = geekdigest ] && extra="-v $DIR:/tenge:ro"   # the evening owner report reads every bot's numbers (read-only)
+  # the evening owner report reads every bot's numbers: only their data folders, read-only (no tokens)
+  [ "$r" = geekdigest ] && extra="-v $DIR/wordlore/data:/tenge/wordlore/data:ro -v $DIR/ideaforgegen/data:/tenge/ideaforgegen/data:ro"
   docker run -d --restart=always --env-file "$r/.env" -v "$DIR/$r/data:/app/data" $extra --name "$r" "$r" >/dev/null
   echo "✓ $r запущен"
 done

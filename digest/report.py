@@ -11,7 +11,8 @@ from common.daily import TZ
 
 ROOT = Path("/tenge")
 BOTS = [("Wordlore", "wordlore/data/lingvo.sqlite3"), ("IdeaForge", "ideaforgegen/data/ideas.sqlite3"),
-        ("Гик-дайджест", "geekdigest/data/digest.sqlite3")]
+        ("Гик-дайджест", "/app/data/digest.sqlite3")]
+CHANNELS = ["@wordlores", "@ideaforges", "@geekdigests", "@geekdigest_eng"]
 
 
 def _one(c, q, args=()):
@@ -39,7 +40,7 @@ def bot_numbers(path: Path, now: float) -> dict:
         c.close()
 
 
-def report(now: float = None, root: Path = ROOT) -> str:
+def report(now: float = None, root: Path = ROOT, channels: dict = None) -> str:
     now = time.time() if now is None else now
     lines = [f"📊 Итоги дня · {datetime.fromtimestamp(now, TZ):%d.%m}"]
     total_new = total_stars = 0
@@ -53,11 +54,23 @@ def report(now: float = None, root: Path = ROOT) -> str:
         total_stars += n["stars_today"]
         lines.append(f"\n<b>{name}</b>\n👥 {n['users']} всего, +{n['new']} сегодня · активных сегодня {n['active']}, за 7 дней {n['week']}\n"
                      f"⭐ сегодня {n['stars_today']}, всего {n['stars']} · 🔔 рассылка {n['subs']}")
+    if channels:
+        lines.append("\n📣 Подписчики каналов: " + " · ".join(f"{ch} {n}" for ch, n in channels.items()))
     lines.append(f"\nИтого за день: +{total_new} новых, {total_stars} ⭐." +
                  ("" if total_new or total_stars else " Людей пока не прибавилось: им нужно узнать о ботах (claude/ПРОДВИЖЕНИЕ.md)."))
     return "\n".join(lines)
 
 
+async def channel_counts(bot) -> dict:
+    out = {}
+    for ch in CHANNELS:
+        try:
+            out[ch] = await bot.get_chat_member_count(ch)
+        except Exception:
+            out[ch] = "?"
+    return out
+
+
 async def send_report(bot, owner: str) -> None:
     if owner.isdigit():
-        await bot.send_message(int(owner), report(), parse_mode="HTML")
+        await bot.send_message(int(owner), report(channels=await channel_counts(bot)), parse_mode="HTML")
